@@ -1,0 +1,17 @@
+[package]
+name = "polygon_clipping"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+geo = "0.28.0"
+geo-clipper = "0.8.0"
+geo-svg = "0.6.2"
+geo-types = "0.7.12"
+lazy_static = "1.4.0"
+minidom = "0.15.2"
+quick-xml = "0.31.0"
+svg = "0.16.0"
+xml_dom = "0.2.6"
