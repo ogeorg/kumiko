@@ -1,0 +1,91 @@
+use std::rc::Rc;
+
+fn main() {
+    let a = Figure { a: 3 };
+    println!("result: {}", a.draw().to_svg_str());
+}
+
+struct Figure {
+    a: i8,
+}
+
+/// A svg document contains a number of items
+/// that cam be translated into svg.  To be translated
+/// to svg, they must have trait ToSvgStr
+///
+/// The lifetime means: if this svg object lives 'a, then
+/// the items must outlive 'a
+pub struct Svg<'a> {
+    pub items: Vec<&'a dyn ToSvgStr>,
+}
+
+pub trait ToSvgStr {
+    fn to_svg_str(&self) -> String;
+}
+impl<'a> ToSvgStr for Svg<'a> {
+    fn to_svg_str(&self) -> String {
+        String::from("abc")
+    }
+}
+
+struct Point {
+    p: i8,
+}
+
+/// the range &[T] must outlive
+///
+impl<'a, T: ToSvgStr> ToSvgStr for &'a [T] {
+    fn to_svg_str(&self) -> String {
+        self.iter().map(|geometry| geometry.to_svg_str()).collect()
+    }
+}
+
+/// Point is translatable
+impl ToSvgStr for Point {
+    fn to_svg_str(&self) -> String {
+        format!("p = {}", self.p)
+    }
+}
+
+/// A trait that translates to svg
+pub trait ToSvg {
+    fn to_svg(&self) -> Svg;
+}
+
+/// If T is translatable, we can ask to translate it to SVG
+impl<T: ToSvgStr> ToSvg for T {
+    fn to_svg(&self) -> Svg {
+        Svg { items: vec![self] }
+    }
+}
+
+impl Figure {
+    fn point(&self) -> &Point {
+        &Point { p: 3 }
+    }
+    fn rcpoint(&self) -> Rc<Point> {
+        Rc::new(Point { p: 3 })
+    }
+    fn points<'a>(&'a self) -> &'a [Point] {
+        let pts = &[Point { p: 3 }, Point { p: 4 }];
+        pts
+    }
+    fn vpoints(&self) -> Vec<Point> {
+        let pts = vec![Point { p: 3 }, Point { p: 4 }];
+        pts
+    }
+
+    fn draw<'a>(self: &'a Figure) -> &'a Svg {
+        let point = self.point();
+        let _svg = point.to_svg();
+
+        let point = self.points();
+        let svg = point.to_svg();
+
+        // cannot return value referencing local variable `point`
+        // svg references point, which "references" self.
+        // svg must live less than self
+        // self must outlive
+        &svg
+    }
+}

@@ -1,33 +1,64 @@
-use crate::oglines::{points2geometry, triangle, InfiniteLine, KumikoConfig, LinesLR};
-use crate::svg::write_svg;
-use core::f64::consts::PI;
-use geo::MultiPoint;
-use geo_svg::{Color, ToSvg};
-use geo_types::{point, LineString, MultiLineString, Point, Polygon};
+use crate::kumiko::{Base, KumikoConfig, KumikoConfigTrait, KumikoFigure};
+use crate::oglines::{angle_between, triangle, InfiniteLine, LinesLR, Rotation};
+use geo_types::{LineString, MultiLineString, Point, Polygon};
 
-pub struct Eventail {
-    pub polygon: Polygon,
+/// An eventail (fan)
+pub struct Eventail<'b> {
+    polygon: Polygon,
     pub rays: MultiLineString,
+    points: Vec<Point>,
+    base: &'b Base,
 }
 
-impl Eventail {
+pub struct EventailConfig {
+    parent: KumikoConfig,
+}
+pub trait EventailConfigTrait: KumikoConfigTrait {}
+
+impl EventailConfigTrait for EventailConfig {}
+
+impl KumikoConfigTrait for EventailConfig {
+    fn width_outer(&self) -> f64 {
+        self.parent.width_outer()
+    }
+
+    fn width_fine(&self) -> f64 {
+        self.parent.width_fine()
+    }
+}
+
+/// A rhombo-like eventail (fan)
+impl<'b> KumikoFigure<EventailConfig> for Eventail<'b> {
+    fn polygon(&self) -> &Polygon {
+        &self.polygon
+    }
+    fn points(&self) -> &[Point] {
+        return &self.points;
+    }
+}
+
+impl<'b> Eventail<'b> {
     /// The points must form a rhomboid
     ///
+    pub fn new_at_base(base: &'b Base, config: &dyn EventailConfigTrait) -> Self {
+        let pu = base.origin + base.u;
+        let pv = base.origin + base.v;
+        let puv = pu + base.v;
 
-    pub fn new_inside_box(pts: &MultiPoint, config: &KumikoConfig) -> Self {
-        let pts = &pts.0;
-        let base_polygons = Eventail::make_base_polygons(pts, &config);
+        let corners = vec![base.origin, pu, puv, pv];
+        let lines = Eventail::make_lines(base, &corners);
+        let base_polygons = Eventail::make_base_polygons(&lines, config);
         let holes: Vec<LineString> = base_polygons
             .iter()
             .map(|poly| poly.exterior().clone())
             .collect();
-        let rays = Eventail::make_rays(pts);
+        let rays = Eventail::make_rays(&lines);
 
         let outer_lines: Vec<InfiniteLine> = vec![
-            InfiniteLine::from_to(&pts[0], &pts[1]).shift_by(config.width_outer),
-            InfiniteLine::from_to(&pts[1], &pts[2]).shift_by(config.width_outer),
-            InfiniteLine::from_to(&pts[2], &pts[3]).shift_by(config.width_outer),
-            InfiniteLine::from_to(&pts[3], &pts[0]).shift_by(config.width_outer),
+            InfiniteLine::from_to(&corners[0], &corners[1]).shift_by(config.width_outer()),
+            InfiniteLine::from_to(&corners[1], &corners[2]).shift_by(config.width_outer()),
+            InfiniteLine::from_to(&corners[2], &corners[3]).shift_by(config.width_outer()),
+            InfiniteLine::from_to(&corners[3], &corners[0]).shift_by(config.width_outer()),
         ];
         let pts = &[
             outer_lines[3].intersection(&outer_lines[0]),
@@ -38,37 +69,58 @@ impl Eventail {
 
         Eventail {
             polygon: Polygon::new(LineString(pts.iter().map(|p| p.0).collect()), holes),
+            points: vec![base.origin, pu, puv, pv],
             rays,
+            base,
         }
     }
+    /// Creates all the lines
+    /// Lines 0 to 8 are the "rays" lines, lines 9 and 10 are the "top" lines
+    fn make_lines(base: &Base, corners: &Vec<Point>) -> Vec<InfiniteLine> {
+        let angle = angle_between(&base.u, &base.v) / 8.0;
+        let rotation = Rotation::by(angle);
 
-    fn make_rays(pts: &[Point]) -> MultiLineString {
-        let lra: Vec<LineString> = (2..=10)
-            .map(|n| {
-                let l = InfiniteLine::from_point_angle(&pts[0], n as f64 * PI / 12.);
+        let mut la: Vec<InfiniteLine> = Vec::new();
+        let mut v = base.u;
+        for _ in 0..=8 {
+            let l = InfiniteLine::from_point_vec(&base.origin, &v);
+            la.push(l);
+            v = rotation.rotate(&v);
+        }
+        la.push(InfiniteLine::from_to(&corners[1], &corners[2]));
+        la.push(InfiniteLine::from_to(&corners[3], &corners[2]));
+        la
+    }
+
+    /// Creates rays of length 1, MultiLineString made of vector of LineString made of segments
+    fn make_rays(lines: &Vec<InfiniteLine>) -> MultiLineString {
+        let ls: Vec<LineString> = lines
+            .iter()
+            .take(9) // first 9 lines
+            .map(|l| {
                 let positions = l.at_times(vec![0., 1.]);
                 LineString::new(positions.iter().map(|p| p.0).collect())
             })
             .collect();
-        MultiLineString(lra)
+        MultiLineString(ls)
     }
 
-    fn make_base_polygons(pts: &[Point], config: &KumikoConfig) -> Vec<Polygon> {
-        // Lines LR from the bottom point Pa
-        let lra: Vec<LinesLR> = (2..=10)
-            .map(|n| {
-                let l = InfiniteLine::from_point_angle(&pts[0], n as f64 * PI / 12.);
-                LinesLR::new(l, config.width_fine)
-            })
+    fn make_base_polygons(
+        lines: &Vec<InfiniteLine>,
+        config: &dyn EventailConfigTrait,
+    ) -> Vec<Polygon> {
+        // Lines LR from the origin
+        let lra: Vec<LinesLR> = lines
+            .iter()
+            .take(9) // first 8 lines
+            .map(|l| LinesLR::new(l, config.width_fine()))
             .collect();
 
         // Lines LR from the right point Pb
-        let lb = InfiniteLine::from_point_angle(&pts[1], 5. * PI / 6.);
-        let lrb = LinesLR::new(lb, config.width_fine);
+        let lrb = LinesLR::new(&lines[9], config.width_fine());
 
         // Lines LR from the left point Pd
-        let ld = InfiniteLine::from_point_angle(&pts[3], PI / 6.);
-        let lrd = LinesLR::new(ld, config.width_fine);
+        let lrd = LinesLR::new(&lines[10], config.width_fine());
 
         let mut polygons: Vec<Polygon> = Vec::new();
         polygons.push(triangle(&lra[0].l, &lrb.l, &lra[1].r));
@@ -83,44 +135,64 @@ impl Eventail {
         polygons
     }
 }
-pub fn draw_test_eventail(filename: &str) {
-    let side: f64 = 4.0;
-    let side_r3o2 = side * f64::sqrt(3.0) / 2.0;
-    let side_1o2 = side / 2.0;
-    let config = KumikoConfig::default();
 
-    let p_a = point! { x: 0., y: 0. }; // base point is the bottom of the eventail
-    let p_b = point! {x: side_r3o2, y: side_1o2};
-    let p_c = point! {x:0., y: side};
-    let p_d = point! {x: -side_r3o2, y: side_1o2};
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oglines::points2geometry;
+    use crate::svg::write_svg;
+    use geo_svg::{Color, ToSvg};
+    use geo_types::point;
 
-    let pts_eventail: Vec<Point> = vec![p_a, p_b, p_c, p_d];
-    let eventail: Eventail = Eventail::new_inside_box(&pts_eventail.into(), &config);
+    fn make_points() -> Vec<Point> {
+        let side: f64 = 4.0;
+        let side_r3o2 = side * f64::sqrt(3.0) / 2.0;
+        let side_1o2 = side / 2.0;
+        vec![
+            point! { x: 0., y: 0. }, // base point is the bottom of the eventail
+            point! {x: side_r3o2, y: side_1o2},
+            point! {x:0., y: side},
+            point! {x: -side_r3o2, y: side_1o2},
+        ]
+    }
 
-    let svg_rays = eventail
-        .rays
-        .to_svg()
-        .with_stroke_width(0.01)
-        .with_stroke_color(Color::Rgb(100, 0, 200));
+    fn make_base(points: &[Point]) -> Base {
+        Base::new(points[0], points[1], points[3])
+    }
 
-    let points = points2geometry(vec![p_a, p_b, p_c, p_d]);
-    let svg_points = points
-        .to_svg()
-        .with_radius(0.02)
-        .with_stroke_width(0.01)
-        .with_stroke_color(Color::Rgb(100, 0, 200))
-        .with_fill_opacity(0.2);
-    let svg_eventail = eventail
-        .polygon
-        .to_svg()
-        .with_stroke_width(0.01)
-        .with_stroke_color(Color::Rgb(200, 0, 0))
-        .with_fill_opacity(0.2);
+    #[test]
+    pub fn draw_eventail() {
+        let config = EventailConfig {
+            parent: KumikoConfig::default(),
+        };
 
-    let svg = svg_eventail //
-        .and(svg_rays) //
-        .and(svg_points) //
-        .to_string();
+        let points = make_points();
+        let base = make_base(&points);
 
-    write_svg(&svg, filename);
+        let eventail: Eventail = Eventail::new_at_base(&base, &config);
+
+        let svg_rays = eventail
+            .rays
+            .to_svg()
+            .with_stroke_width(0.01)
+            .with_stroke_color(Color::Rgb(100, 0, 200));
+
+        let points = points2geometry(&points);
+        let svg_points = points
+            .to_svg()
+            .with_radius(0.02)
+            .with_stroke_width(0.01)
+            .with_stroke_color(Color::Rgb(100, 0, 200))
+            .with_fill_opacity(0.2);
+        let svg_eventail = eventail.draw_figure();
+        let svg_base = eventail.base.draw();
+
+        let svg = svg_eventail //
+            .and(svg_base) //
+            //.and(svg_rays) //
+            .and(svg_points) //
+            .to_string();
+
+        write_svg(&svg, "test_figures/eventail.svg");
+    }
 }
